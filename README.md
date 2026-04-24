@@ -143,6 +143,7 @@ Observacao sobre a turbidez: o seu codigo antigo calculava `pureza %`, onde nume
 Como o ESP32 vai escrever direto no Realtime Database, o banco precisa aceitar escrita do dispositivo.
 
 Deixei um modelo em [firebase/realtime-database.rules.json](/home/bluefrost/Documentos/GitHub/ConexaoAzulPI/firebase/realtime-database.rules.json:1).
+Tambem deixei a estrutura-base em [firebase/realtime-database.structure.json](/home/bluefrost/Documentos/GitHub/ConexaoAzulPI/firebase/realtime-database.structure.json:1).
 
 Esse modelo:
 
@@ -152,6 +153,22 @@ Esse modelo:
 - cria indice para `measured_at_unix`
 
 Para prototipo, esse caminho e o mais simples. Em producao, o ideal e substituir a escrita publica por Firebase Authentication com token de usuario/dispositivo.
+
+Para montar a estrutura inicial do banco automaticamente, rode:
+
+```bash
+source .venv/bin/activate
+python scripts/bootstrap_firebase_structure.py
+```
+
+Esse bootstrap cria, se ainda nao existirem:
+
+- `metadata`
+- `monitoring_config`
+- `devices`
+- `locations`
+- `latest_readings`
+- `water_readings`
 
 Trecho ilustrativo de escrita direta usando REST:
 

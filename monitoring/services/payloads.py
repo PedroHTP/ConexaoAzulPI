@@ -18,6 +18,8 @@ FIELD_ALIASES = {
     ],
     "source": ["source", "origem"],
     "measured_at": ["measured_at", "timestamp", "data_hora"],
+    "status": ["status"],
+    "diag": ["diag"],
 }
 
 
@@ -93,6 +95,15 @@ def normalize_sensor_payload(payload):
             _first_present(payload, FIELD_ALIASES["measured_at"])
         ),
     }
+
+    status = _first_present(payload, FIELD_ALIASES["status"])
+    if status not in ("", None):
+        normalized["status"] = str(status)
+
+    diag = _first_present(payload, FIELD_ALIASES["diag"])
+    if isinstance(diag, dict):
+        normalized["diag"] = diag
+
     return normalized
 
 
@@ -112,7 +123,7 @@ def to_realtime_database_record(reading):
     measured_at = reading["measured_at"]
     received_at = reading["received_at"]
 
-    return {
+    record = {
         "device_id": reading["device_id"],
         "location": reading["location"],
         "temperature_c": reading["temperature_c"],
@@ -125,6 +136,11 @@ def to_realtime_database_record(reading):
         "received_at": received_at.isoformat(),
         "received_at_unix": int(received_at.timestamp()),
     }
+    if "status" in reading:
+        record["status"] = reading["status"]
+    if "diag" in reading:
+        record["diag"] = reading["diag"]
+    return record
 
 
 def from_realtime_database_record(reading_id, record):
@@ -140,6 +156,11 @@ def from_realtime_database_record(reading_id, record):
         "measured_at": _parse_datetime_string(record.get("measured_at"), "measured_at"),
         "received_at": _parse_datetime_string(record.get("received_at"), "received_at"),
     }
+
+    if "status" in record and record.get("status") is not None:
+        restored["status"] = str(record.get("status"))
+    if isinstance(record.get("diag"), dict):
+        restored["diag"] = record.get("diag")
 
     if restored["measured_at"] is None:
         restored["measured_at"] = timezone.now()

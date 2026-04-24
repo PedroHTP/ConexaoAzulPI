@@ -1,0 +1,96 @@
+{
+  "metadata": {
+    "project_name": "Conexao Azul",
+    "database_model": "firebase-realtime-database",
+    "version": 1,
+    "description": "Estrutura base para monitoramento de qualidade da agua com ESP32, Django e Firebase."
+  },
+  "monitoring_config": {
+    "thresholds": {
+      "temperature_c": {
+        "normal_min": 20,
+        "normal_max": 30,
+        "alert_min": 15,
+        "alert_max": 35
+      },
+      "turbidity_ntu": {
+        "normal_max": 5,
+        "alert_max": 25
+      },
+      "ph": {
+        "normal_min": 6.5,
+        "normal_max": 8.5,
+        "alert_min": 6.0,
+        "alert_max": 9.0
+      },
+      "water_level_cm": {
+        "normal_min": 40,
+        "normal_max": 180
+      }
+    },
+    "sampling": {
+      "default_interval_seconds": 15,
+      "timezone": "America/Bahia"
+    }
+  },
+  "devices": {
+    "esp32-rio-01": {
+      "device_id": "esp32-rio-01",
+      "display_name": "ESP32 Rio 01",
+      "location_slug": "rio-sao-francisco",
+      "location_name": "Rio Sao Francisco",
+      "status": "active",
+      "transport_modes": {
+        "wifi_firebase": true,
+        "serial_usb_fallback": true
+      },
+      "sensors": {
+        "temperature": {
+          "enabled": true,
+          "pin": 4,
+          "type": "DS18B20"
+        },
+        "turbidity": {
+          "enabled": true,
+          "pin": 34,
+          "type": "analog"
+        },
+        "ph": {
+          "enabled": true,
+          "pin": 32,
+          "type": "analog"
+        },
+        "ultrasonic": {
+          "enabled": true,
+          "trig_pin": 5,
+          "echo_pin": 18,
+          "type": "HC-SR04"
+        }
+      }
+    }
+  },
+  "locations": {
+    "rio-sao-francisco": {
+      "slug": "rio-sao-francisco",
+      "name": "Rio Sao Francisco",
+      "environment": "rio",
+      "status": "active",
+      "description": "Ponto inicial de monitoramento cadastrado no projeto."
+    }
+  },
+  "latest_readings": {
+    "esp32-rio-01": {
+      "device_id": "esp32-rio-01",
+      "location": "Rio Sao Francisco",
+      "temperature_c": null,
+      "turbidity_ntu": null,
+      "ph": null,
+      "water_level_cm": null,
+      "source": "esp32",
+      "measured_at": null,
+      "measured_at_unix": null,
+      "status": "waiting_first_reading"
+    }
+  },
+  "water_readings": {}
+}

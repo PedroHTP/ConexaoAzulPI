@@ -25,6 +25,10 @@ const char* DEVICE_LOCATION = "Rio Sao Francisco";
 // Intervalo entre envios para o backend.
 const unsigned long INTERVALO_ENVIO_MS = 15000;
 
+// Debug serial inspirado na estrutura do outro firmware.
+const bool SERIAL_DEBUG_HUMAN = true;
+const bool SERIAL_DIAGNOSTICS_JSON = true;
+
 // Calibracao do pH.
 const float voltagemReferencia = 1.93;
 const float phReferencia = 7.0;
@@ -40,6 +44,120 @@ DallasTemperature sensors(&oneWire);
 
 unsigned long ultimoEnvio = 0;
 bool relogioSincronizado = false;
+bool ultimoEnvioFirebaseOk = false;
+int ultimoHttpCode = 0;
+
+void imprimirSeparador() {
+  Serial.println("--------------------------------------------------");
+}
+
+void printJsonBool(bool value) {
+  Serial.print(value ? "true" : "false");
+}
+
+const char* statusWiFiTexto() {
+  return WiFi.status() == WL_CONNECTED ? "CONECTADO" : "DESCONECTADO";
+}
+
+const char* statusNtpTexto() {
+  return relogioSincronizado ? "SINCRONIZADO" : "NAO SINCRONIZADO";
+}
+
+void imprimirStatusConectividade() {
+  Serial.print("Wi-Fi: ");
+  Serial.print(statusWiFiTexto());
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print(" | IP: ");
+    Serial.print(WiFi.localIP());
+  }
+  Serial.print(" | NTP: ");
+  Serial.println(statusNtpTexto());
+
+  Serial.print("Firebase URL: ");
+  Serial.println(FIREBASE_DATABASE_URL);
+  Serial.print("Firebase Path: ");
+  Serial.println(FIREBASE_RTDB_PATH);
+  Serial.print("Ultimo envio Firebase: ");
+  Serial.print(ultimoEnvioFirebaseOk ? "SUCESSO" : "PENDENTE/FALHA");
+  Serial.print(" | HTTP: ");
+  Serial.println(ultimoHttpCode);
+}
+
+void imprimirLeiturasSensores(
+  float nivelAguaCm,
+  float temperatura,
+  float turbidezNTU,
+  int pureza,
+  float ph
+) {
+  Serial.println("Leituras dos sensores:");
+
+  Serial.print("  Nivel da agua: ");
+  if (nivelAguaCm < 0) {
+    Serial.println("erro");
+  } else {
+    Serial.print(nivelAguaCm, 1);
+    Serial.println(" cm");
+  }
+
+  Serial.print("  Temperatura: ");
+  Serial.print(temperatura, 1);
+  Serial.println(" C");
+
+  Serial.print("  Turbidez: ");
+  Serial.print(turbidezNTU, 1);
+  Serial.println(" NTU");
+
+  Serial.print("  Pureza estimada: ");
+  Serial.print(pureza);
+  Serial.println("%");
+
+  Serial.print("  pH: ");
+  Serial.println(ph, 2);
+}
+
+String classificarLeitura(
+  float ph,
+  float turbidezNTU,
+  float temperatura,
+  float nivelAguaCm
+) {
+  if (nivelAguaCm < 0 || turbidezNTU > 25 || ph < 6.0 || ph > 9.0 || temperatura < 15.0 || temperatura > 35.0) {
+    return "CRITICA";
+  }
+
+  if (turbidezNTU > 5 || ph < 6.5 || ph > 8.5 || temperatura < 20.0 || temperatura > 30.0 || nivelAguaCm < 40.0 || nivelAguaCm > 180.0) {
+    return "ALERTA";
+  }
+
+  return "BOA";
+}
+
+String diagnosticarTemperatura(float rawTempC, bool tempFallback) {
+  if (tempFallback) return "sensor_ausente_ou_falha";
+  if (rawTempC < -20.0 || rawTempC > 85.0) return "fora_da_faixa_esperada";
+  return "ok";
+}
+
+String diagnosticarPH(float vPH, float phFinal) {
+  if (vPH < 0.02) return "sem_sinal";
+  if (phFinal < 0.0 || phFinal > 14.0) return "fora_da_escala";
+  return "ok";
+}
+
+String diagnosticarTurbidez(int adcTurb, float vTurb) {
+  if (adcTurb <= 10) return "sem_sinal";
+  if (adcTurb >= 4090) return "saturado";
+  if (vTurb < 0.05) return "sinal_muito_baixo";
+  return "ok";
+}
+
+String diagnosticarNivel(float nivelAguaCm, bool nivelErro) {
+  if (nivelErro) return "sem_echo_ou_timeout";
+  if (nivelAguaCm < 0.0) return "invalido";
+  if (nivelAguaCm > 400.0) return "fora_da_faixa_esperada";
+  return "ok";
+}
 
 void conectarWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
@@ -93,7 +211,7 @@ void sincronizarRelogio() {
   }
 }
 
-float lerNivelAguaCm() {
+float lerNivelAguaCm(bool &nivelErro) {
   digitalWrite(pinoTrig, LOW);
   delayMicroseconds(2);
   digitalWrite(pinoTrig, HIGH);
@@ -102,33 +220,36 @@ float lerNivelAguaCm() {
 
   unsigned long duracao = pulseIn(pinoEcho, HIGH, 30000);
   if (duracao == 0) {
+    nivelErro = true;
     return -1.0;
   }
 
+  nivelErro = false;
   return duracao * 0.034f / 2.0f;
 }
 
-float lerTemperaturaC() {
+float lerTemperaturaC(float &rawTempC, bool &tempFallback) {
   sensors.requestTemperatures();
-  float temperatura = sensors.getTempCByIndex(0);
+  rawTempC = sensors.getTempCByIndex(0);
 
-  if (temperatura == DEVICE_DISCONNECTED_C) {
-    return -127.0;
+  tempFallback = (rawTempC == DEVICE_DISCONNECTED_C || rawTempC == -127.0);
+  if (tempFallback) {
+    return 25.0;
   }
 
-  return temperatura;
+  return rawTempC;
 }
 
-float lerPh() {
+float lerPh(int &adcPH, float &vPH) {
   long somaPH = 0;
   for (int i = 0; i < 100; i++) {
     somaPH += analogRead(pinoPH);
     delay(1);
   }
 
-  float mediaBrutaPH = (float)somaPH / 100.0f;
-  float voltPH = mediaBrutaPH * (3.3f / 4095.0f);
-  float phInstantaneo = phReferencia - ((voltPH - voltagemReferencia) * multiplicadorPH);
+  adcPH = round((float)somaPH / 100.0f);
+  vPH = adcPH * (3.3f / 4095.0f);
+  float phInstantaneo = phReferencia - ((vPH - voltagemReferencia) * multiplicadorPH);
 
   phEstabilizado = (phEstabilizado * 0.80f) + (phInstantaneo * 0.20f);
 
@@ -142,24 +263,20 @@ float lerPh() {
   return phEstabilizado;
 }
 
-int lerTurbidezBruta() {
+float lerTurbidezNTU(int &adcTurb, float &vTurb, int &pureza) {
   long soma = 0;
   for (int i = 0; i < 20; i++) {
     soma += analogRead(pinoTurbidez);
     delay(2);
   }
 
-  return (int)(soma / 20);
-}
+  adcTurb = round((float)soma / 20.0f);
+  vTurb = adcTurb * 3.3f / 4095.0f;
 
-float calcularTurbidezNTU(int leituraBruta) {
-  int leituraLimitada = constrain(leituraBruta, turbidezLimpaADC, turbidezSujaADC);
-  return map(leituraLimitada, turbidezLimpaADC, turbidezSujaADC, 0, 100);
-}
-
-int calcularPurezaPercentual(float turbidezNTU) {
-  int pureza = 100 - (int)round(turbidezNTU);
-  return constrain(pureza, 0, 100);
+  int leituraLimitada = constrain(adcTurb, turbidezLimpaADC, turbidezSujaADC);
+  float turbidezNTU = map(leituraLimitada, turbidezLimpaADC, turbidezSujaADC, 0, 100);
+  pureza = constrain(100 - (int)round(turbidezNTU), 0, 100);
+  return turbidezNTU;
 }
 
 String montarTimestampIso8601(time_t timestampUtc) {
@@ -219,9 +336,17 @@ String montarPayloadSerialUsb(
   float temperatura,
   float turbidezNTU,
   float ph,
-  float nivelAguaCm
+  float nivelAguaCm,
+  float rawTempC,
+  bool tempFallback,
+  bool nivelErro,
+  int adcPH,
+  float vPH,
+  int adcTurb,
+  float vTurb
 ) {
   String payload = "{";
+  String status = classificarLeitura(ph, turbidezNTU, temperatura, nivelAguaCm);
   payload += "\"device_id\":\"";
   payload += DEVICE_ID;
   payload += "\",";
@@ -240,9 +365,116 @@ String montarPayloadSerialUsb(
   payload += "\"water_level_cm\":";
   payload += String(nivelAguaCm, 2);
   payload += ",";
+  payload += "\"status\":\"";
+  payload += status;
+  payload += "\",";
   payload += "\"source\":\"esp32-serial-usb\"";
+
+  if (SERIAL_DIAGNOSTICS_JSON) {
+    payload += ",\"diag\":{";
+    payload += "\"temp_status\":\"";
+    payload += diagnosticarTemperatura(rawTempC, tempFallback);
+    payload += "\",\"temp_raw_c\":";
+    payload += String(rawTempC, 1);
+    payload += ",\"temp_fallback\":";
+    payload += tempFallback ? "true" : "false";
+    payload += ",\"ph_status\":\"";
+    payload += diagnosticarPH(vPH, ph);
+    payload += "\",\"ph_adc\":";
+    payload += String(adcPH);
+    payload += ",\"ph_v\":";
+    payload += String(vPH, 3);
+    payload += ",\"turbidity_status\":\"";
+    payload += diagnosticarTurbidez(adcTurb, vTurb);
+    payload += "\",\"turbidity_adc\":";
+    payload += String(adcTurb);
+    payload += ",\"turbidity_v\":";
+    payload += String(vTurb, 3);
+    payload += ",\"water_level_status\":\"";
+    payload += diagnosticarNivel(nivelAguaCm, nivelErro);
+    payload += "\"}";
+  }
+
   payload += "}";
   return payload;
+}
+
+void printJsonReading(
+  float ph,
+  float turbidezNTU,
+  float temperatura,
+  float nivelAguaCm,
+  float rawTempC,
+  bool tempFallback,
+  bool nivelErro,
+  int adcPH,
+  float vPH,
+  int adcTurb,
+  float vTurb
+) {
+  String payload = montarPayloadSerialUsb(
+    temperatura,
+    turbidezNTU,
+    ph,
+    nivelAguaCm,
+    rawTempC,
+    tempFallback,
+    nivelErro,
+    adcPH,
+    vPH,
+    adcTurb,
+    vTurb
+  );
+  Serial.println("SERIAL_JSON:" + payload);
+}
+
+void printHumanReadableReading(
+  float ph,
+  float turbidezNTU,
+  float temperatura,
+  float nivelAguaCm,
+  int pureza,
+  float rawTempC,
+  bool tempFallback,
+  bool nivelErro,
+  int adcPH,
+  float vPH,
+  int adcTurb,
+  float vTurb
+) {
+  String status = classificarLeitura(ph, turbidezNTU, temperatura, nivelAguaCm);
+
+  Serial.println("Resumo legivel:");
+  Serial.print("  STATUS: ");
+  Serial.println(status);
+
+  imprimirLeiturasSensores(nivelAguaCm, temperatura, turbidezNTU, pureza, ph);
+
+  Serial.print("  [DIAG] TEMP: ");
+  Serial.print(diagnosticarTemperatura(rawTempC, tempFallback));
+  Serial.print(" | raw=");
+  Serial.print(rawTempC, 1);
+  Serial.print(" C | fallback=");
+  Serial.println(tempFallback ? "sim" : "nao");
+
+  Serial.print("  [DIAG] pH: ");
+  Serial.print(diagnosticarPH(vPH, ph));
+  Serial.print(" | ADC=");
+  Serial.print(adcPH);
+  Serial.print(" | V_pH=");
+  Serial.print(vPH, 3);
+  Serial.println("V");
+
+  Serial.print("  [DIAG] TURB: ");
+  Serial.print(diagnosticarTurbidez(adcTurb, vTurb));
+  Serial.print(" | ADC=");
+  Serial.print(adcTurb);
+  Serial.print(" | V_Turb=");
+  Serial.print(vTurb, 3);
+  Serial.println("V");
+
+  Serial.print("  [DIAG] NIVEL: ");
+  Serial.println(diagnosticarNivel(nivelAguaCm, nivelErro));
 }
 
 String montarUrlFirebase(String readingId) {
@@ -267,11 +499,15 @@ String montarUrlFirebase(String readingId) {
 void enviarLeitura(float temperatura, float turbidezNTU, float ph, float nivelAguaCm) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Envio cancelado: Wi-Fi desconectado.");
+    ultimoEnvioFirebaseOk = false;
+    ultimoHttpCode = 0;
     return;
   }
 
   if (!relogioSincronizado) {
     Serial.println("Envio cancelado: horario ainda nao sincronizado.");
+    ultimoEnvioFirebaseOk = false;
+    ultimoHttpCode = 0;
     return;
   }
 
@@ -296,6 +532,8 @@ void enviarLeitura(float temperatura, float turbidezNTU, float ph, float nivelAg
   http.begin(client, url);
   http.addHeader("Content-Type", "application/json");
   int httpCode = http.PUT(payload);
+  ultimoHttpCode = httpCode;
+  ultimoEnvioFirebaseOk = httpCode >= 200 && httpCode < 300;
 
   Serial.print("PUT ");
   Serial.print(url);
@@ -304,11 +542,17 @@ void enviarLeitura(float temperatura, float turbidezNTU, float ph, float nivelAg
 
   if (httpCode > 0) {
     String resposta = http.getString();
-    Serial.println("Resposta da API:");
+    Serial.println("Resposta do Firebase:");
     Serial.println(resposta);
+    if (ultimoEnvioFirebaseOk) {
+      Serial.println("Leitura gravada com sucesso no Firebase.");
+    } else {
+      Serial.println("Firebase respondeu, mas a gravacao nao foi confirmada como sucesso.");
+    }
   } else {
     Serial.print("Falha no envio: ");
     Serial.println(http.errorToString(httpCode));
+    Serial.println("Leitura NAO foi gravada no Firebase.");
   }
 
   http.end();
@@ -318,11 +562,50 @@ void enviarLeituraSerialUsb(
   float temperatura,
   float turbidezNTU,
   float ph,
-  float nivelAguaCm
+  float nivelAguaCm,
+  float rawTempC,
+  bool tempFallback,
+  bool nivelErro,
+  int adcPH,
+  float vPH,
+  int adcTurb,
+  float vTurb,
+  int pureza
 ) {
-  String payload = montarPayloadSerialUsb(temperatura, turbidezNTU, ph, nivelAguaCm);
+  ultimoEnvioFirebaseOk = false;
+  ultimoHttpCode = 0;
+  Serial.println("Firebase indisponivel neste ciclo. Ativando fallback por Serial USB.");
   Serial.println("FALLBACK_SERIAL_USB");
-  Serial.println("SERIAL_JSON:" + payload);
+  printJsonReading(
+    ph,
+    turbidezNTU,
+    temperatura,
+    nivelAguaCm,
+    rawTempC,
+    tempFallback,
+    nivelErro,
+    adcPH,
+    vPH,
+    adcTurb,
+    vTurb
+  );
+
+  if (SERIAL_DEBUG_HUMAN) {
+    printHumanReadableReading(
+      ph,
+      turbidezNTU,
+      temperatura,
+      nivelAguaCm,
+      pureza,
+      rawTempC,
+      tempFallback,
+      nivelErro,
+      adcPH,
+      vPH,
+      adcTurb,
+      vTurb
+    );
+  }
 }
 
 void setup() {
@@ -357,39 +640,55 @@ void loop() {
   conectarWiFi();
   sincronizarRelogio();
 
-  float nivelAguaCm = lerNivelAguaCm();
-  float temperatura = lerTemperaturaC();
-  float ph = lerPh();
-  int turbidezBruta = lerTurbidezBruta();
-  float turbidezNTU = calcularTurbidezNTU(turbidezBruta);
-  int pureza = calcularPurezaPercentual(turbidezNTU);
+  bool nivelErro = false;
+  float nivelAguaCm = lerNivelAguaCm(nivelErro);
 
-  Serial.print("Nivel: ");
-  if (nivelAguaCm < 0) {
-    Serial.print("Erro");
-  } else {
-    Serial.print(nivelAguaCm, 1);
-    Serial.print(" cm");
-  }
+  float rawTempC = 0.0f;
+  bool tempFallback = false;
+  float temperatura = lerTemperaturaC(rawTempC, tempFallback);
 
-  Serial.print(" | Temp: ");
-  Serial.print(temperatura, 1);
-  Serial.print(" C | Turbidez: ");
-  Serial.print(turbidezNTU, 1);
-  Serial.print(" NTU | Pureza: ");
-  Serial.print(pureza);
-  Serial.print("% | pH: ");
-  Serial.println(ph, 2);
+  int adcPH = 0;
+  float vPH = 0.0f;
+  float ph = lerPh(adcPH, vPH);
+
+  int adcTurb = 0;
+  float vTurb = 0.0f;
+  int pureza = 0;
+  float turbidezNTU = lerTurbidezNTU(adcTurb, vTurb, pureza);
+
+  imprimirSeparador();
+  imprimirStatusConectividade();
+  imprimirLeiturasSensores(nivelAguaCm, temperatura, turbidezNTU, pureza, ph);
 
   if (nivelAguaCm >= 0 && temperatura > -100.0f) {
     if (WiFi.status() == WL_CONNECTED && relogioSincronizado) {
+      Serial.println("Modo ativo: envio direto para Firebase.");
       enviarLeitura(temperatura, turbidezNTU, ph, nivelAguaCm);
     } else {
-      enviarLeituraSerialUsb(temperatura, turbidezNTU, ph, nivelAguaCm);
+      Serial.println("Modo ativo: fallback por Serial USB.");
+      enviarLeituraSerialUsb(
+        temperatura,
+        turbidezNTU,
+        ph,
+        nivelAguaCm,
+        rawTempC,
+        tempFallback,
+        nivelErro,
+        adcPH,
+        vPH,
+        adcTurb,
+        vTurb,
+        pureza
+      );
     }
   } else {
     Serial.println("Leitura ignorada por erro de sensor.");
+    ultimoEnvioFirebaseOk = false;
+    ultimoHttpCode = 0;
   }
+
+  imprimirStatusConectividade();
+  imprimirSeparador();
 
   digitalWrite(LED_INTERNO, LOW);
 }
