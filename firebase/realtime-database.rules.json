@@ -1,0 +1,50 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "water_readings": {
+      ".read": false,
+      ".indexOn": ["measured_at_unix"],
+      "$readingId": {
+        ".write": true,
+        ".validate": "newData.hasChildren(['device_id', 'location', 'temperature_c', 'turbidity_ntu', 'ph', 'water_level_cm', 'source', 'measured_at', 'measured_at_unix'])",
+        "device_id": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 100"
+        },
+        "location": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 150"
+        },
+        "temperature_c": {
+          ".validate": "newData.isNumber() && newData.val() >= -20 && newData.val() <= 120"
+        },
+        "turbidity_ntu": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000"
+        },
+        "ph": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 14"
+        },
+        "water_level_cm": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10000"
+        },
+        "source": {
+          ".validate": "newData.isString() && (newData.val() == 'esp32' || newData.val() == 'esp32-direct')"
+        },
+        "measured_at": {
+          ".validate": "newData.isString() && newData.val().length >= 20"
+        },
+        "measured_at_unix": {
+          ".validate": "newData.isNumber() && newData.val() > 1700000000"
+        },
+        "received_at": {
+          ".validate": "!newData.exists() || (newData.isString() && newData.val().length >= 20)"
+        },
+        "received_at_unix": {
+          ".validate": "!newData.exists() || (newData.isNumber() && newData.val() > 1700000000)"
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    }
+  }
+}

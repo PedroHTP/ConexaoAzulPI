@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}Painel de Monitoramento Hidrico{% endblock %}
+
+{% block content %}
+<main class="dashboard">
+    <section class="hero">
+        <div class="hero-copy">
+            <span class="eyebrow">Django + Firebase + ESP32</span>
+            <h1>Monitoramento inteligente da qualidade da agua em rios e oceanos.</h1>
+            <p>
+                Este painel recebe leituras do ESP32, guarda tudo no Firebase e transforma
+                os dados brutos em um resumo ambiental facil de entender.
+            </p>
+            <div class="hero-actions">
+                <a class="button" href="/api/health/">Ver status da API</a>
+                <code>Firebase RTDB / {{ firebase_rtdb_path }}</code>
+            </div>
+        </div>
+        <div class="hero-panel">
+            <h2>Leitura mais recente</h2>
+            {% if latest_reading %}
+                <div class="status-pill status-{{ latest_reading.analysis.overall_status }}">
+                    {{ latest_reading.analysis.overall_status|upper }}
+                </div>
+                <p class="summary">{{ latest_reading.analysis.summary }}</p>
+                <div class="metrics-grid">
+                    {% for metric in latest_reading.analysis.metrics %}
+                        <article class="metric-card status-{{ metric.status }}">
+                            <span>{{ metric.name }}</span>
+                            <strong>{{ metric.value }} {{ metric.unit }}</strong>
+                            <p>{{ metric.message }}</p>
+                        </article>
+                    {% endfor %}
+                </div>
+                <p class="meta">
+                    Dispositivo: <strong>{{ latest_reading.device_id }}</strong><br>
+                    Local: <strong>{{ latest_reading.location }}</strong><br>
+                    Medido em: <strong>{{ latest_reading.measured_at|date:"d/m/Y H:i" }}</strong>
+                </p>
+            {% else %}
+                <p class="summary">Ainda nao ha leituras no Firebase. Assim que o ESP32 enviar dados, elas aparecerao aqui.</p>
+                <pre>{{ sample_payload }}</pre>
+            {% endif %}
+        </div>
+    </section>
+
+    <section class="info-grid">
+        <article class="panel">
+            <h2>Como os dados chegam</h2>
+            <p>
+                O ESP32 coleta os sensores em campo e grava a leitura diretamente no caminho
+                <code>{{ firebase_rtdb_path }}</code> do Realtime Database.
+            </p>
+            <p>
+                O Django fica responsavel por ler essas medicoes do Firebase, montar o painel
+                e destacar condicoes normais, de alerta ou criticas para facilitar a decisao.
+            </p>
+            {% if firebase_database_url %}
+                <p>Banco configurado em <code>{{ firebase_database_url }}</code>.</p>
+            {% endif %}
+        </article>
+
+        <article class="panel">
+            <h2>Status da integracao</h2>
+            {% if firebase_ready %}
+                <p class="status-copy success">Firebase pronto para leitura e gravacao.</p>
+            {% else %}
+                <p class="status-copy warning">{{ firebase_error }}</p>
+                <p>Configure a variavel <code>FIREBASE_CREDENTIALS_PATH</code> para ativar a persistencia.</p>
+            {% endif %}
+        </article>
+    </section>
+
+    <section class="panel">
+        <h2>O que cada sensor explica</h2>
+        <div class="sensor-grid">
+            {% for sensor in sensor_descriptions %}
+                <article class="sensor-card">
+                    <div class="sensor-head">
+                        <h3>{{ sensor.name }}</h3>
+                        <span>{{ sensor.unit }}</span>
+                    </div>
+                    <p>{{ sensor.description }}</p>
+                </article>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="panel">
+        <h2>Ultimas leituras</h2>
+        {% if recent_readings %}
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Data</th>
+                            <th>Dispositivo</th>
+                            <th>Temperatura</th>
+                            <th>Turbidez</th>
+                            <th>pH</th>
+                            <th>Nivel</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for reading in recent_readings %}
+                            <tr>
+                                <td>{{ reading.measured_at|date:"d/m/Y H:i" }}</td>
+                                <td>{{ reading.device_id }}</td>
+                                <td>{{ reading.temperature_c }} degC</td>
+                                <td>{{ reading.turbidity_ntu }} NTU</td>
+                                <td>{{ reading.ph }}</td>
+                                <td>{{ reading.water_level_cm }} cm</td>
+                                <td>
+                                    <span class="status-pill status-{{ reading.analysis.overall_status }}">
+                                        {{ reading.analysis.overall_status|upper }}
+                                    </span>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p>Nenhuma leitura registrada ainda.</p>
+        {% endif %}
+    </section>
+</main>
+{% endblock %}
